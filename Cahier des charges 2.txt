@@ -1,0 +1,227 @@
+0) Executive summary
+
+But : une web‑app d’édition vidéo verticale 9:16 (style Reels/Shorts/Stories) qui permet d’importer MP4/MP3, monter (trim, musique, fades, volume, calage), prévisualiser, et exporter un MP4 1080×1920, 30 fps, H.264/AAC optimisé pour upload manuel (avec -movflags +faststart). [stackoverflow.com]
+Technos clés (décidées) : Next.js 14 + TypeScript, Tailwind + shadcn/ui, Zustand, WaveSurfer.js, ffmpeg.wasm v0.12+ (self‑host) + COOP/COEP activés pour les threads WASM, Supabase (Auth/DB/Storage avec signed URLs), OpenAI (optionnel) côté serveur. 4 [nikofischer.com], [dev.to]
+Intégrations plateformes : préparées (YouTube videos.insert, IG Reels container→publish, TikTok Content Posting), désactivées en MVP ; validations dynamiques pour rester à jour. [github.com], [learn.microsoft.com], [getphyllo.com], [docs.conte...tstudio.io]
+Robustesse & faisabilité : rendu local (privacy, coût nul, latence réseau nulle), garde‑fous (validations JSON, messages d’erreur), possibilité de fallback rendu serveur ultérieurement pour les longues vidéos. [supabase.r...thedocs.io]
+
+
+1) Portée & objectifs
+1.1 Objectifs produit
+
+MVP :
+
+Import .mp4 et .mp3 (drag‑drop & bouton).
+Édition : trim vidéo, ajout musique, offset, volume en dB, fade in/out, préécoute synchronisée.
+Export local : 1080×1920, 30 fps, H.264/AAC, +faststart ; Télécharger. [stackoverflow.com]
+Validations dynamiques (JSON) des presets plate‑formes (durée/fps/codec/bitrate).
+Statistiques basiques (durée finale, fps, taille, temps de rendu).
+
+
+Prévu (inactif au MVP) : publication YouTube/IG/TikTok (OAuth & API). [github.com], [getphyllo.com], [docs.conte...tstudio.io]
+
+1.2 Hors périmètre MVP (préparé dans l’archi)
+
+Rendu serveur (FFmpeg natif + queue) pour >X min.
+Beat detection, templates animés avancés, PWA “share_target”.
+
+
+2) Personae & critères UX
+
+Créateur solo : 15–90 s, workflow rapide ; UI sans friction.
+Community manager : presets fiables et compatibles “upload manuel”.
+Novice : garde‑fous (warnings), micro‑onboarding (astuces).
+KPI UX : time‑to‑first‑render < 60 s pour 20–30 s de clip sur laptop moyen ; abandon < 5 %.
+
+
+3) Exigences fonctionnelles
+3.1 Import & gestion des médias
+
+Formats : MP4 (H.264/AAC) & MP3.
+Méthodes : drag‑drop + select.
+Modes de stockage :
+
+Connecté (par défaut) : upload vers Supabase Storage via createSignedUploadUrl ; option résumable (Tus/Uppy) pour gros fichiers. 4 [Architecture | Txt]
+Local‑first (fallback) : assets & projets en IndexedDB/OPFS (aucun cloud).
+
+
+
+3.2 Éditeur audio/vidéo
+
+Lecteur : aperçu 9:16 avec letterboxing si nécessaire.
+Timeline : scrubbing fluide ; marqueurs début/fin ; zoom simple.
+Outils :
+
+Trim vidéo (start_ms/end_ms).
+Musique : ajout MP3, offset_ms, gain_db, fade_in/out_ms.
+Préécoute : mix approximatif (HTML5 + WebAudio).
+
+
+Sauvegarde : timelines.edits en JSON ; bouton Enregistrer (statut de modification clair).
+
+3.3 Catalogue musique (optionnel MVP)
+
+Mini library interne (pistes libres) + tags/mood/BPM ; recherche ; intégration IA pour suggestions (si activée).
+
+3.4 Export
+
+Paramètres : 1080×1920, 30 fps, H.264/AAC.
+Optimisation : -movflags +faststart (MOOV en tête) pour améliorer l’ingestion et la lecture immédiate côté plateformes. [stackoverflow.com]
+Sortie : Télécharger le MP4 rendu.
+Validations : vérifier contre JSON (durée, fps, codec…) ; afficher warnings si dépassement.
+
+
+Le rendu est 100 % dans le navigateur via ffmpeg.wasm v0.12+ (API récente). [nikofischer.com]
+
+3.5 IA (toggle “ON/OFF”)
+
+Music recommender / Edit coach / Titre‑Description‑Hashtags via OpenAI (routes serveur).
+Transcription : Audio API OpenAI (SRT/VTT simples) — limite d’upload direct ~25 MB par fichier ; au‑delà, segmenter côté client/serveur. [github.com]
+Si pas de clé : masquer les widgets IA.
+
+3.6 Statistiques & analytics
+
+In‑app : durée finale, fps, taille export, temps de rendu.
+Analytics internes : événements anonymisés (upload, edit_scrub, render_start/done).
+
+3.7 Intégrations plateformes (préparées, inactives)
+
+YouTube : OAuth (scope youtube.upload), endpoint videos.insert, coût 100 unités/upload, quota 10 000/jour par projet ; projets non vérifiés → uploads privés par défaut. [github.com], [learn.microsoft.com]
+Instagram Reels : flow container (/{ig_user_id}/media?media_type=REELS&video_url=...) → publish (/{ig_user_id}/media_publish), compte Business/Creator lié Page FB, fichiers MP4 H.264/AAC ; MOOV en tête recommandé. [getphyllo.com], [stackoverflow.com]
+TikTok : Content Posting API (init → upload chunks ou PULL_FROM_URL), domaine HTTPS vérifié obligatoire. [docs.conte...tstudio.io], [upload-post.com]
+
+
+4) Exigences non‑fonctionnelles
+4.1 Performance & limites
+
+ffmpeg.wasm : binaire initial à charger ; rendu plus lent que natif ; risque OOM sur gros médias — d’où UX de guidance et futur fallback serveur. [supabase.r...thedocs.io]
+COOP/COEP : obligatoires pour activer SharedArrayBuffer/threads (gains significatifs + compat Firefox). [dev.to]
+Self‑hosting ffmpeg-core.* (dans /public/ffmpeg) pour éviter les blocages liés aux headers des CDNs. [deepwiki.com]
+
+4.2 Accessibilité
+
+shadcn/ui (composants accessibles), focus management, raccourcis clavier (espace : play/pause ; J/L : ±10 s).
+
+4.3 Sécurité & confidentialité
+
+Jamais exposer SUPABASE_SERVICE_ROLE ni OPENAI_API_KEY au client.
+Supabase Storage : buckets privés, RLS par userId/projet, signed URLs pour upload/lecture. 4
+OAuth (futur) : tokens chiffrés, refresh côté serveur.
+
+
+5) Architecture décidée
+5.1 Front & API
+
+Next.js 14 + TS (App Router).
+UI : Tailwind + shadcn/ui ; State : Zustand ; Audio : WaveSurfer.js.
+Rendu : ffmpeg.wasm v0.12+ self‑hosté + headers COOP/COEP (voir snippet §7.1). [nikofischer.com], [dev.to]
+API routes (server only) :
+
+/api/upload/create-signed-url → Supabase createSignedUploadUrl (PUT direct navigateur). 4
+/api/projects (POST/GET) ; /api/projects/[id] (GET/PATCH).
+/api/ai/* (OpenAI) ; /api/validators (JSON).
+(futur) /api/youtube/*, /api/instagram/*, /api/tiktok/*.
+
+
+
+5.2 Données (Supabase)
+
+Tables : profiles (FK → auth.users), projects, assets, timelines, music_library, exports, oauth_connections, analytics_events.
+Storage : buckets privés assets/ et renders/ (arborescence {userId}/...) ; accès via signed URLs ; résumable possible (Tus). [Architecture | Txt]
+
+5.3 Fallback rendu serveur (roadmap)
+
+Micro‑service (FastAPI/Node) + FFmpeg natif ; queue sur exports (queued|processing|done|error).
+Déclenchement pour > X minutes ou OOM navigateur. [supabase.r...thedocs.io]
+
+
+6) Modèle fonctionnel des données (résumé)
+
+profiles : id (= auth.users.id), display_name, created_at.
+projects : id, owner_id, title, status (draft|rendering|rendered), duration_ms, fps, aspect ('9:16'), timestamps.
+assets : id, project_id, type (video|audio), storage_path, original_name, duration_ms, metadata.
+timelines : id, project_id, video_asset_id, audio_asset_id, edits (jsonb) =
+video:{start_ms,end_ms}, audio:{offset_ms,gain_db,fade_in_ms,fade_out_ms}.
+music_library : id, title, artist, bpm, mood, tags[], storage_path.
+exports : id, project_id, target (file|youtube|tiktok|instagram), status (queued|processing|done|error), storage_path, external_video_id, log, created_at.
+oauth_connections (futur) : provider, access_token (encrypted), refresh_token (encrypted), expires_at, scopes.
+analytics_events : user_id, project_id, event, payload, created_at.
+
+
+7) Spécifications minimales “implémentables” (sans alourdir de code)
+7.1 En‑têtes COOP/COEP (indispensable) : // next.config.js (extrait)
+module.exports = {
+  async headers() {
+    return [{ source: '/(.*)', headers: [
+      { key: 'Cross-Origin-Opener-Policy', value: 'same-origin' },
+      { key: 'Cross-Origin-Embedder-Policy', value: 'require-corp' },
+    ]}];
+  },
+};
+
+(Active SharedArrayBuffer/threads pour ffmpeg.wasm — nécessaire pour perfs et compat Firefox.) [dev.to]
+7.2 Export MP4 (paramètres cibles, non‑bloquant)
+
+1080×1920 (letterbox si besoin), 30 fps, H.264/AAC, -movflags +faststart. (Commandes concrètes côté code sans alourdir le CDC.) [stackoverflow.com]
+
+
+8) Validations “plateformes” (JSON dynamique)
+
+Shorts (YT) : durée ≤ 60 s, 1080×1920, 30 fps, H.264/AAC (exemple). Upload futur via videos.insert (100 unités / 10 000/j par projet). [github.com], [learn.microsoft.com]
+Reels (IG) : jusqu’à ~15 min, 23–60 fps, H.264/AAC ; MOOV en tête recommandé (faststart). [stackoverflow.com]
+TikTok : 1080×1920, 23–60 fps, H.264/AAC ; futur upload via Content Posting API avec domaine vérifié. [docs.conte...tstudio.io], [upload-post.com]
+
+
+Décision : ces règles sont stockées dans un JSON versionné et chargées au runtime pour être modifiables sans redéploiement.
+
+
+9) Tests & qualité
+
+Unitaires : parsers edits, mapping presets/validators, helpers temps.
+Intégration : upload signé → ligne assets + fichier en bucket ; sauvegarde timeline ; export MP4 non vide. 4
+E2E (Playwright) : Import MP4 → Ajouter MP3 (offset/volume/fades) → Enregistrer → Export → Télécharger.
+Perf : mesurer time‑to‑first‑render (cible < 60 s pour 20–30 s de clip, machine moyenne).
+Compat : Chrome/Edge/Firefox/Safari récents (avec COOP/COEP). [dev.to]
+
+
+10) Déploiement & exploitation
+
+Hébergement : Vercel/Netlify/Node ; self‑host public/ffmpeg/* ; activer COOP/COEP globalement. [deepwiki.com]
+Variables d’env (exemple) :
+
+Client : NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY.
+Serveur : SUPABASE_SERVICE_ROLE, OPENAI_API_KEY (si IA). 4
+
+
+Observabilité : logs routes API, table analytics_events.
+Feature flags : IA ON/OFF ; intégrations plateformes ON/OFF.
+
+
+11) Risques & atténuations
+
+OOM navigateur (gros médias) → limite de durée au MVP, UX de guidance, rendu serveur en roadmap. [supabase.r...thedocs.io]
+COOP/COEP manquants → threads WASM indisponibles (dégradations ou erreurs) → bloquant ; snippet fourni §7.1. [dev.to]
+CDN sans bons headers pour ffmpeg-core.* → self‑hosting requis. [deepwiki.com]
+Exigences plateformes qui évoluent → validators JSON dynamiques.
+Quota YouTube (futur) → monitoring, éventuellement demande d’augmentation. [learn.microsoft.com]
+
+
+12) Roadmap (post‑MVP)
+
+Upload YouTube (OAuth Web) → videos.insert (100 unités), quota 10 000/j ; tokens chiffrés/refresh. [github.com], [learn.microsoft.com]
+Instagram Reels (Business/Creator + Page FB) → container/publish ; faststart recommandé. [getphyllo.com], [stackoverflow.com]
+TikTok (Content Posting API) → init + chunks / PULL_FROM_URL ; domaine vérifié. [docs.conte...tstudio.io], [upload-post.com]
+Rendu serveur FFmpeg natif + queue.
+PWA (offline + share_target).
+Beat detection & templates animés.
+
+
+13) Critères d’acceptation MVP
+
+Import .mp4/.mp3 OK (drag‑drop + bouton).
+Édition : trim vidéo + musique (offset/volume/fades) + préécoute synchro.
+Export MP4 1080×1920 30 fps H.264/AAC avec +faststart → fichier lisible et non vide. [stackoverflow.com]
+Warnings validators affichés lorsque hors limites.
+Projets & assets sauvegardés (Supabase ou local‑first).
+Tests E2E verts (Import → Edit → Export → Download).
+

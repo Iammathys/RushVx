@@ -1,0 +1,46 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #0f0f12;
+  --surface: #18181c;
+  --border: #2a2a30;
+  --text: #f4f4f5;
+  --muted: #a1a1aa;
+  --accent: #6366f1;
+  --accent-hover: #818cf8;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+}
+
+/* Ratio 9:16 pour le lecteur */
+.aspect-9-16 {
+  aspect-ratio: 9 / 16;
+}
+
+/* Boutons et contrôles */
+.btn {
+  @apply px-4 py-2 rounded-lg font-medium transition-colors;
+}
+.btn-primary {
+  @apply bg-indigo-600 text-white hover:bg-indigo-500;
+}
+.btn-secondary {
+  @apply bg-zinc-700 text-zinc-200 hover:bg-zinc-600;
+}
+.btn-ghost {
+  @apply bg-transparent hover:bg-zinc-800 text-zinc-300;
+}
+
+.input {
+  @apply w-full rounded-lg border border-zinc-600 bg-zinc-800/50 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500;
+}
+
+.label {
+  @apply block text-sm font-medium text-zinc-400 mb-1;
+}

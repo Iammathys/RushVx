@@ -1,0 +1,7 @@
+{
+  "name": "documentation-2-workspace",
+  "private": true,
+  "scripts": {
+    "dev": "node start-rushvx.js"
+  }
+}

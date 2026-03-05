@@ -1,0 +1,27 @@
+{
+  "YOUTUBE_SHORTS": {
+    "maxDurationSec": 60,
+    "width": 1080,
+    "height": 1920,
+    "fps": [24, 25, 30, 60],
+    "vCodec": "h264",
+    "aCodec": "aac"
+  },
+  "INSTAGRAM_REELS": {
+    "maxDurationSec": 900,
+    "width": 1080,
+    "height": 1920,
+    "fps": [23, 24, 25, 30, 60],
+    "vCodec": "h264",
+    "aCodec": "aac",
+    "fastStart": true
+  },
+  "TIKTOK": {
+    "maxDurationSec": 600,
+    "width": 1080,
+    "height": 1920,
+    "fps": [24, 25, 30, 60],
+    "vCodec": "h264",
+    "aCodec": "aac"
+  }
+}

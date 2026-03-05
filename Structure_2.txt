@@ -1,0 +1,388 @@
+1) Arborescence du repo
+vertical-video-app/
+├─ apps/
+│  └─ web/                            # Next.js 14 (App Router) + TypeScript
+│     ├─ app/
+│     │  ├─ page.tsx                  # Landing + import
+│     │  ├─ editor/[projectId]/page.tsx
+│     │  ├─ export/[projectId]/page.tsx
+│     │  ├─ stats/[projectId]/page.tsx
+│     │  └─ api/
+│     │     ├─ upload/
+│     │     │  └─ create-signed-url/route.ts
+│     │     ├─ projects/
+│     │     │  ├─ route.ts            # POST (create), GET (list)
+│     │     │  └─ [id]/route.ts       # GET (read), PATCH (save edits)
+│     │     ├─ validators/route.ts    # GET: sert le JSON des règles plateformes
+│     │     └─ health/route.ts        # GET: healthcheck simple
+│     ├─ components/
+│     │  ├─ BottomNav.tsx
+│     │  ├─ VideoPlayer.tsx
+│     │  ├─ Timeline.tsx
+│     │  ├─ MusicPanel.tsx
+│     │  └─ ExportPanel.tsx
+│     ├─ lib/
+│     │  ├─ ffmpeg.ts                 # wrapper ffmpeg.wasm v0.12 (self-host)
+│     │  ├─ supabaseClient.ts         # côté client (anon)
+│     │  ├─ supabaseAdmin.ts          # côté serveur (service_role)
+│     │  ├─ validators.ts             # types & helpers de validation
+│     │  └─ storage.ts                # helpers supabase storage (sign urls)
+│     ├─ store/
+│     │  └─ editorStore.ts
+│     ├─ config/
+│     │  └─ validators.platforms.json # règles dynamiques (durée/fps/codec…)
+│     ├─ db/
+│     │  ├─ schema.sql                # tables (profiles, projects, assets…)
+│     │  ├─ policies.sql              # RLS tables
+│     │  └─ storage_policies.sql      # RLS storage.objects
+│     ├─ public/
+│     │  └─ ffmpeg/                   # ffmpeg-core.js/wasm/worker.js (self-host)
+│     ├─ styles/
+│     │  └─ globals.css
+│     ├─ scripts/
+│     │  └─ copy-ffmpeg-core.mjs      # copie @ffmpeg/core → public/ffmpeg
+│     ├─ .env.example
+│     ├─ next.config.js
+│     ├─ package.json
+│     └─ tsconfig.json
+└─ README.md
+
+
+2) Dépendances
+Dans apps/web/package.json (je fournis plus bas), on utilise au minimum :
+
+next, react, react-dom, typescript, tailwindcss + postcss, autoprefixer
+zustand, wavesurfer.js
+@ffmpeg/ffmpeg et @ffmpeg/util (API v0.12) [nikofischer.com]
+@supabase/supabase-js
+Outils de test (optionnel à ce stade).
+
+
+3) Fichiers clés (snippets essentiels, sans lourdeur)
+3.1 apps/web/next.config.js — COOP/COEP (indispensable)
+
+Active l’isolation cross‑origin pour SharedArrayBuffer/threads (performances et compatibilité FF).
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  async headers() {
+    return [
+      {
+        source: '/(.*)',
+        headers: [
+          { key: 'Cross-Origin-Opener-Policy', value: 'same-origin' },
+          { key: 'Cross-Origin-Embedder-Policy', value: 'require-corp' },
+        ],
+      },
+    ]
+  },
+}
+module.exports = nextConfig
+``
+
+3.2 apps/web/lib/ffmpeg.ts — wrapper ffmpeg.wasm v0.12 (self‑host)
+API v0.12 : on instancie new FFmpeg() et on charge les URLs self‑hostées dans /public/ffmpeg.
+// apps/web/lib/ffmpeg.ts
+import { FFmpeg } from '@ffmpeg/ffmpeg'
+import { fetchFile } from '@ffmpeg/util'
+
+let _ffmpeg: FFmpeg | null = null
+
+export async function getFFmpeg() {
+  if (_ffmpeg) return _ffmpeg
+  const ffmpeg = new FFmpeg()
+  const baseURL = '/ffmpeg' // public/ffmpeg/*
+  await ffmpeg.load({
+    coreURL:   `${baseURL}/ffmpeg-core.js`,
+    wasmURL:   `${baseURL}/ffmpeg-core.wasm`,
+    workerURL: `${baseURL}/ffmpeg-core.worker.js`,
+  })
+  _ffmpeg = ffmpeg
+  return ffmpeg
+}
+
+export async function renderVideo(opts: {
+  videoFile: File
+  audioFile?: File
+  startMs?: number
+  endMs?: number
+  audioOffsetMs?: number
+  volumeDb?: number
+}) {
+  const { videoFile, audioFile, startMs, endMs, audioOffsetMs, volumeDb } = opts
+  const ffmpeg = await getFFmpeg()
+  await ffmpeg.writeFile('in.mp4', await fetchFile(videoFile))
+  if (audioFile) await ffmpeg.writeFile('in.mp3', await fetchFile(audioFile))
+
+  const trimArgs =
+    startMs != null && endMs != null
+      ? ['-ss', String(startMs / 1000), '-to', String(endMs / 1000)]
+      : []
+
+  if (audioFile) {
+    const vol = volumeDb != null ? `volume=${volumeDb}dB` : 'anull'
+    const astart = audioOffsetMs
+      ? ['-itsoffset', String(audioOffsetMs / 1000), '-i', 'in.mp3']
+      : ['-i', 'in.mp3']
+    await ffmpeg.exec([
+      '-i', 'in.mp4',
+      ...astart,
+      ...trimArgs,
+      '-filter_complex', `[1:a]${vol}[a1]`,
+      '-map', '0:v:0', '-map', '[a1]',
+      '-r', '30',
+      '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease',
+      '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23',
+      '-c:a', 'aac', '-b:a', '192k',
+      '-movflags', '+faststart', // MOOV atom en tête (ingestion plus fiable)
+      'out.mp4',
+    ])
+  } else {
+    await ffmpeg.exec([
+      '-i', 'in.mp4',
+      ...trimArgs,
+      '-r', '30',
+      '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease',
+      '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23',
+      '-c:a', 'aac', '-b:a', '192k',
+      '-movflags', '+faststart',
+      'out.mp4',
+    ])
+  }
+
+  const data = await ffmpeg.readFile('out.mp4')
+  return new Blob([data.buffer], { type: 'video/mp4' })
+}
+3.3 apps/web/lib/supabaseClient.ts & supabaseAdmin.ts
+// apps/web/lib/supabaseClient.ts (côté client)
+import { createClient } from '@supabase/supabase-js'
+export const supabaseBrowser = () =>
+  createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    { auth: { persistSession: true, autoRefreshToken: true } }
+  )
+// apps/web/lib/supabaseAdmin.ts (côté serveur)
+import { createClient } from '@supabase/supabase-js'
+export const supabaseAdmin = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE!, // SERVER ONLY
+  { auth: { persistSession: false, autoRefreshToken: false } }
+)
+``
+3.4 apps/web/app/api/upload/create-signed-url/route.ts :
+// apps/web/app/api/upload/create-signed-url/route.ts
+import { NextRequest, NextResponse } from 'next/server'
+import { supabaseAdmin } from '@/lib/supabaseAdmin'
+
+export async function POST(req: NextRequest) {
+  const { filename, bucket = 'assets', pathPrefix = '' } = await req.json()
+  const safeName = `${crypto.randomUUID()}-${filename}`
+  const path = `${pathPrefix}${safeName}`.replace(/^\/+/, '')
+  const { data, error } = await supabaseAdmin
+    .storage.from(bucket).createSignedUploadUrl(path)
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 400 })
+  return NextResponse.json({ url: data?.signedUrl, path })
+}
+3.5 apps/web/config/validators.platforms.json (exemple)
+JSON{
+{
+  "YOUTUBE_SHORTS": { "maxDurationSec": 60,  "width": 1080, "height": 1920, "fps": [24,25,30,60], "vCodec": "h264", "aCodec": "aac" },
+  "INSTAGRAM_REELS": { "maxDurationSec": 900, "width": 1080, "height": 1920, "fps": [23,24,25,30,60], "vCodec": "h264", "aCodec": "aac", "fastStart": true },
+  "TIKTOK": { "maxDurationSec": 600, "width": 1080, "height": 1920, "fps": [24,25,30,60], "vCodec": "h264", "aCodec": "aac" }
+}
+3.6 apps/web/app/api/validators/route.ts
+import { NextResponse } from 'next/server'
+import validators from '@/config/validators.platforms.json'
+export async function GET() { return NextResponse.json(validators) }
+
+) SQL Supabase (DB + RLS)
+4.1 apps/web/db/schema.sql (extraits essentiels)
+create table if not exists profiles (
+  id uuid primary key,              -- = auth.users.id
+  display_name text,
+  created_at timestamptz default now()
+);
+
+create table if not exists projects (
+  id uuid primary key default gen_random_uuid(),
+  owner_id uuid references profiles(id) not null,
+  title text,
+  status text check (status in ('draft','rendering','rendered')) default 'draft',
+  duration_ms int, fps int, aspect text default '9:16',
+  created_at timestamptz default now(), updated_at timestamptz default now()
+);
+
+create table if not exists assets (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid references projects(id) on delete cascade not null,
+  type text check (type in ('video','audio')) not null,
+  storage_path text not null, original_name text,
+  duration_ms int, metadata jsonb, created_at timestamptz default now()
+);
+
+create table if not exists timelines (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid references projects(id) on delete cascade not null,
+  video_asset_id uuid references assets(id),
+  audio_asset_id uuid references assets(id),
+  edits jsonb,
+  created_at timestamptz default now(), updated_at timestamptz default now()
+);
+
+create table if not exists exports (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid references projects(id) on delete cascade not null,
+  target text check (target in ('file','youtube','tiktok','instagram')) not null,
+  status text check (status in ('queued','processing','done','error')) default 'queued',
+  storage_path text, external_video_id text, log text,
+  created_at timestamptz default now()
+);
+4.2 apps/web/db/policies.sql (RLS tables)
+alter table projects enable row level security;
+create policy "projects_select_own" on projects for select using (owner_id = auth.uid());
+create policy "projects_modify_own" on projects for all    using (owner_id = auth.uid());
+
+alter table assets enable row level security;
+create policy "assets_select_own" on assets for select using (
+  exists(select 1 from projects p where p.id = assets.project_id and p.owner_id = auth.uid())
+);
+create policy "assets_modify_own" on assets for all using (
+  exists(select 1 from projects p where p.id = assets.project_id and p.owner_id = auth.uid())
+);
+
+alter table timelines enable row level security;
+create policy "timelines_select_own" on timelines for select using (
+  exists(select 1 from projects p where p.id = timelines.project_id and p.owner_id = auth.uid())
+);
+create policy "timelines_modify_own" on timelines for all using (
+  exists(select 1 from projects p where p.id = timelines.project_id and p.owner_id = auth.uid())
+);
+
+alter table exports enable row level security;
+create policy "exports_select_own" on exports for select using (
+  exists(select 1 from projects p where p.id = exports.project_id and p.owner_id = auth.uid())
+);
+create policy "exports_modify_own" on exports for all using (
+  exists(select 1 from projects p where p.id = exports.project_id and p.owner_id = auth.uid())
+);
+4.3 apps/web/db/storage_policies.sql (RLS Storage)
+-- Exemple indicatif : adapter selon ton nom de bucket
+-- storage.objects : activer RLS depuis le dashboard ou via SQL
+-- CREATE POLICYs pour INSERT/SELECT/UPDATE/DELETE restreints à son dossier
+
+-- SELECT : lire uniquement ses fichiers
+create policy "storage_select_own" on storage.objects
+for select to authenticated
+using (bucket_id in ('assets','renders')
+   and (storage.foldername(name))[1] = auth.uid()::text);
+
+-- INSERT : n'autoriser que sous {auth.uid()}/
+create policy "storage_insert_own" on storage.objects
+for insert to authenticated
+with check (bucket_id in ('assets','renders')
+   and (storage.foldername(name))[1] = auth.uid()::text);
+
+-- UPDATE / DELETE similaires si nécessaire
+5) UI minimale (composants)
+
+BottomNav.tsx : navigation fixe Stats — Editer — Export.
+VideoPlayer.tsx : <video> 9:16 responsive.
+Timeline.tsx : wrapper WaveSurfer.js + callbacks (scrub/zoom léger).
+MusicPanel.tsx : import MP3, offset/volume/fades.
+ExportPanel.tsx : choix preset (vertical 1080×1920/30 fps), bouton Rendre → blob → Télécharger.
+
+(Je garde le code UI minimal pour ne pas alourdir ce cahier des charges.)
+
+6) apps/web/package.json (scripts utiles + copy core FFmpeg)
+5) UI minimale (composants)
+
+BottomNav.tsx : navigation fixe Stats — Editer — Export.
+VideoPlayer.tsx : <video> 9:16 responsive.
+Timeline.tsx : wrapper WaveSurfer.js + callbacks (scrub/zoom léger).
+MusicPanel.tsx : import MP3, offset/volume/fades.
+ExportPanel.tsx : choix preset (vertical 1080×1920/30 fps), bouton Rendre → blob → Télécharger.
+
+(Je garde le code UI minimal pour ne pas alourdir ce cahier des charges.)
+
+6) apps/web/package.json (scripts utiles + copy core FFmpeg):
+{
+  "name": "vertical-video-web",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 3000",
+    "build": "next build",
+    "start": "next start -p 3000",
+    "postinstall": "node ./scripts/copy-ffmpeg-core.mjs"
+  },
+  "dependencies": {
+    "@ffmpeg/ffmpeg": "^0.12.7",
+    "@ffmpeg/util": "^0.12.1",
+    "@supabase/supabase-js": "^2.45.0",
+    "next": "14.2.5",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "tailwindcss": "^3.4.10",
+    "wavesurfer.js": "^7.8.7",
+    "zustand": "^4.5.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^18",
+    "autoprefixer": "^10",
+    "postcss": "^8",
+    "typescript": "^5.6.2"
+  }
+}
+6.1 apps/web/scripts/copy-ffmpeg-core.mjs
+import fs from 'node:fs'
+import path from 'node:path'
+const src = path.resolve('node_modules/@ffmpeg/core/dist/umd')
+const dst = path.resolve('public/ffmpeg')
+fs.mkdirSync(dst, { recursive: true })
+for (const f of ['ffmpeg-core.js','ffmpeg-core.wasm','ffmpeg-core.worker.js']) {
+  fs.copyFileSync(path.join(src, f), path.join(dst, f))
+  console.log(`copied ${f}`)
+}
+7) .env.example (à placer dans apps/web/.env.local)
+# Supabase (client)
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+# Supabase (serveur)
+SUPABASE_SERVICE_ROLE=
+
+# Optionnel IA (si tu veux l'activer plus tard)
+OPENAI_API_KEY=
+8) README (extraits — étapes Cursor)
+8.1 Installation
+# 1) Crée le dossier et ouvre-le dans Cursor
+# 2) Initialise le workspace Next.js (si besoin) ou colle les fichiers fournis
+cd apps/web
+npm i
+# copie automatique ffmpeg-core.* → public/ffmpeg via postinstall
+8.2 Lancer en local
+cp .env.example .env.local
+# renseigne les variables Supabase (recommandé) sinon tu peux rester 100% local-first
+npm run dev
+# http://localhost:3000
+8.3 Supabase (optionnel mais recommandé)
+
+Crée assets et renders (buckets privés).
+Exécute db/schema.sql, db/policies.sql, db/storage_policies.sql.
+Utilise /api/upload/create-signed-url pour obtenir l’URL et PUT le fichier depuis le navigateur (sécurisé). 4
+Si fichiers lourds, voir exemple résumable Tus/Uppy ultérieurement. [Architecture | Txt]
+
+8.4 Pourquoi COOP/COEP + self‑host FFmpeg ?
+
+Les threads WASM (donc SharedArrayBuffer) requièrent COOP/COEP pour être activés dans les navigateurs modernes. [dev.to]
+Certains CDN (ex. liens externes) ne fournissent pas les bons headers → self‑host ffmpeg-core.* pour éviter les blocages. [deepwiki.com]
+ffmpeg.wasm v0.12 → nouvelle API (classe FFmpeg). [nikofischer.com]
+
+
+9) Points d’extension (pré‑routés, mais désactivés)
+
+/app/api/youtube/* → OAuth + videos.insert (100 unités/upload ; quota projet 10 000/jour par défaut). [github.com], [learn.microsoft.com]
+/app/api/instagram/* → container (/media?media_type=REELS) → publish (/media_publish). [getphyllo.com]
+/app/api/tiktok/* → init upload + chunks ou PULL_FROM_URL (domaine HTTPS vérifié). [docs.conte...tstudio.io], [upload-post.com]
+
+(Ces routes ne sont pas incluses ici pour éviter d’alourdir — la structure est prête à les accueillir.)
