@@ -14,11 +14,18 @@ npm install
 npm run dev
 ```
 
-Ouvre [http://localhost:3000](http://localhost:3000). L’app tourne dans `vertical-video-app/apps/web/` (script racine `npm run dev` lance ce dossier).
+Ouvre [http://localhost:3000](http://localhost:3000).
+
+## Déploiement Vercel
+
+1. Importe le dépôt GitHub dans Vercel.
+2. **Root Directory** : laisse **vide** (l’app est à la racine du dépôt).
+3. Ajoute les variables d’environnement (Settings → Environment Variables) : `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`.
+4. Déploie.
 
 ## Variables d’environnement
 
-Créer `vertical-video-app/apps/web/.env.local` avec :
+Créer `.env.local` à la racine du projet avec :
 
 - `NEXT_PUBLIC_SUPABASE_URL`
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
